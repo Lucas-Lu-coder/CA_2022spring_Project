@@ -52,7 +52,8 @@ module CHIP(clk,
     wire [6:0] opcode;
     wire [2:0] func3;
     wire [6:0] func7;
-    wire [11:0] imm12, imm_beq, imm_sw;
+    wire [5:0] shamt;
+    wire [11:0] imm12, imm_branch, imm_sw;
     wire [19:0] imm20, imm_jal;
 
     // assign PC
@@ -65,8 +66,9 @@ module CHIP(clk,
     assign rd = mem_rdata_I[11:7];
     assign rs1 = mem_rdata_I[19:15];
     assign rs2 = mem_rdata_I[24:20];
+    assign shamt = mem_rdata_I[25:20];
     assign imm12 = mem_rdata_I[31:20];
-    assign imm_beq = {mem_rdata_I[31], mem_rdata_I[7], mem_rdata_I[30:25], mem_rdata_I[11:8]};
+    assign imm_branch = {mem_rdata_I[31], mem_rdata_I[7], mem_rdata_I[30:25], mem_rdata_I[11:8]};
     assign imm_sw = {mem_rdata_I[31:25], mem_rdata_I[11:7]};
     assign imm20 = mem_rdata_I[31:12];
     assign imm_jal = {mem_rdata_I[31], mem_rdata_I[19:12], mem_rdata_I[20], mem_rdata_I[30:21]};
@@ -94,14 +96,18 @@ module CHIP(clk,
     parameter auipc = 7'b0010111;
     parameter jal = 7'b1101111;
     parameter jalr = 7'b1100111;
-    parameter beq = 7'b1100011;
+    parameter branch = 7'b1100011; // beq, bge
     parameter lw = 7'b0000011;
     parameter sw = 7'b0100011;
-    parameter i_type = 7'b0010011; // addi, slti
+    parameter i_type = 7'b0010011; // addi, slti, slli, srli
     parameter arith = 7'b0110011;  // add, sub, xor, mul
     // parameter for func3
+    parameter beq = 3'b000;
+    parameter bge = 3'b101;
     parameter addi = 3'b000;
     parameter slti = 3'b010;
+    parameter slli = 3'b001;
+    parameter srli = 3'b101;
     parameter xor3 = 3'b100;
     // parameter for func7
     parameter add = 7'b0000000; // equals to xor7
@@ -109,7 +115,7 @@ module CHIP(clk,
     parameter mul = 7'b0000001;
 
     // assign value to regWrite
-    assign regWrite = !(opcode == beq)
+    assign regWrite = !(opcode == branch)
                       && !(opcode == sw)
                       && !(opcode == mul && alu_running == 1'b0) 
                       && !(opcode == mul && alu_running == 1'b1 && mulDiv_ready == 1'b0);
@@ -126,7 +132,8 @@ module CHIP(clk,
     assign rd_data  = (opcode == auipc) ? (PC + {imm20, {12'd0}}) :
                       (opcode == jal || opcode == jalr) ? (PC + 4) :
                       (opcode == lw) ? mem_rdata_D :
-                      (opcode == i_type) ? ( (func3 == addi) ? (rs1_data + {{20{imm12[11]}}, imm12}) : (rs1_data < imm12) ) :
+                      (opcode == i_type) ? ( (func3 == addi) ? (rs1_data + {{20{imm12[11]}}, imm12}) : ((func3 == slti) ? (rs1_data < imm12) :
+                      ((func3 == slli) ? (rs1_data << shamt) : (rs1_data >> shamt))) ) :
                       (opcode == arith) ? ( (func3 == xor3) ? (rs1_data ^ rs2_data) : ((func7 == add) ? (rs1_data + rs2_data) :
                       ((func7 == sub) ? (rs1_data - rs2_data) : (mulDiv_ready == 1) ? mulDiv_out[31:0] : 32'd0)) ) : 32'd0;
     
@@ -134,11 +141,17 @@ module CHIP(clk,
     always @(*) begin
         case(opcode)
             jal : PC_nxt = PC + {{11{imm_jal[19]}}, imm_jal, 1'd0};
-            jalr: PC_nxt = rs1_data + imm12;
-            beq : PC_nxt = (rs1_data == rs2_data) ? (PC + {{19{imm_beq[11]}}, imm_beq, 1'd0}) : (PC + 4);
+            jalr : PC_nxt = rs1_data + imm12;
+            branch : begin
+                case(func3)
+                    beq : PC_nxt = (rs1_data == rs2_data) ? (PC + {{19{imm_branch[11]}}, imm_branch, 1'd0}) : (PC + 4);
+                    bge : PC_nxt = (rs1_data >= rs2_data) ? (PC + {{19{imm_branch[11]}}, imm_branch, 1'd0}) : (PC + 4);
+                    default : PC_nxt = PC + 4;
+                endcase
+            end
             arith : begin
                 case(func7)
-                    mul: PC_nxt = (mulDiv_ready == 1) ? (PC + 4) : PC;
+                    mul : PC_nxt = (mulDiv_ready == 1) ? (PC + 4) : PC;
                     default : PC_nxt = PC + 4;
                 endcase
             end
