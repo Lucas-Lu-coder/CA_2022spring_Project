@@ -1,6 +1,6 @@
 .data
-    n: .word 10
-    r: .word 3
+    n: .word 8
+    r: .word 5
 .text
 .globl __start
 
